@@ -77,6 +77,8 @@ message SetupInfoPacket {
     // indicating to the node that this (re)share operation should be started
     // even if there is already one in progress.
     bool force = 10;
+    // for which version of the randomness generation are we creating this group
+    uint32 version = 11;
 }
 
 message InitDKGPacket {
@@ -128,6 +130,7 @@ message GroupInfo {
 
 // ShareRequest requests the private share of a drand node
 message ShareRequest {
+    bytes group_hash = 1;
 }
 
 // ShareResponse holds the private share of a drand node
@@ -162,11 +165,13 @@ message PrivateKeyResponse {
 
 // CokeyRequest requests the collective key of a drand node
 message CokeyRequest {
+    bytes group_hash = 1;
 }
 
 // CokeyResponse holds the collective key of a drand node
 message CokeyResponse {
-  bytes coKey = 2;
+    bytes coKey = 2;
+    bytes group_hash = 3;
 }
 
 message GroupTOMLResponse {

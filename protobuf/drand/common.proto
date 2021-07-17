@@ -40,6 +40,7 @@ message GroupPacket {
     repeated bytes dist_key = 7;
     // catchup_period in seconds
     uint32 catchup_period = 8;
+    uint32 version = 9;
 }
 message GroupRequest {
 
@@ -60,4 +61,13 @@ message ChainInfoPacket {
     bytes hash = 4;
     // hash of the genesis group
     bytes groupHash = 5;
+    uint32 version = 6;
+}
+
+message ChainsRequest {
+    repeated bytes group_hash = 1;
+}
+
+message ChainsInfo {
+    repeated ChainInfoPacket chains = 1;
 }

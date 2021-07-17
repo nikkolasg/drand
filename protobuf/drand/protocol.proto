@@ -69,6 +69,9 @@ message PartialBeaconPacket {
     // partial signature - a threshold of them needs to be aggregated to produce
     // the final beacon at the given round.
     bytes partial_sig = 3;
+    // represents the group by which this randomness is generated
+    // The version is already attached to the group.
+    bytes group_hash = 4;
 }
 
 // DKGPacket is the packet that nodes send to others nodes as part of the
@@ -81,10 +84,12 @@ message DKGPacket{
 // chain
 message SyncRequest {
     uint64 from_round = 1;
+    bytes group_hash = 2;
 }
 
 message BeaconPacket {
     bytes previous_sig = 1;
     uint64 round = 2;
     bytes signature = 3;
+    bytes group_hash = 4;
 }
