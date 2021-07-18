@@ -1,11 +1,14 @@
 package drand
 
 import (
+	"context"
+	"errors"
 	"path"
 	"sync"
 
 	"github.com/drand/drand/log"
 	"github.com/drand/drand/net"
+	"github.com/drand/drand/protobuf/drand"
 )
 
 type ID = string
@@ -14,6 +17,10 @@ type Server struct {
 	sync.RWMutex
 	// list of active protocols
 	protocols map[ID]Protocol
+	// explicit inclusion of the V1 ID to know how to fill the id on incoming
+	// messages. We make the assumption that there is only one V1 protocol
+	// running.
+	v1ID ID
 	// running setup protocol. It is nil when there is no setup in progress.
 	setup Protocol
 	// all the network componenents. The server maintains them all and dispatch
@@ -47,6 +54,10 @@ func (s *Server) LoadProtocols() error {
 			continue
 		}
 		s.protocols[protocol.Key()] = protocol
+		if c.Version == VERSION_1 {
+			// explicit saving of the v1 ID
+			s.v1ID = protocol.Key()
+		}
 	}
 	// XXX Later we could also save some information for a protocol that was in
 	// the setup phase and restore it here
@@ -68,6 +79,27 @@ func (s *Server) Descriptions() []string {
 
 func (s *Server) Stop() {
 
+}
+
+// Example of a function to dispatch to correct protocol. It looks at the group
+// hash field (the ID) and then dspatch. If it is not present, we have the
+// exception case for V1 where we fill the field manually with the V1 protocol ID.
+func (s *Server) PartialBeacon(c context.Context, in *drand.PartialBeaconPacket) (*drand.Empty, error) {
+	if len(in.groupHash) == 0 {
+		// We are in the v1 case so we fill via the ID we have
+		if len(s.v1ID) == 0 {
+			return nil, errors.New("No group hash mentionned and no v1 ID registered")
+		}
+		in.groupHash = []byte(s.v1ID)
+	}
+	id := string(in.groupHash)
+	s.RLock()
+	p, ok := s.protocols[id]
+	s.RUnLock()
+	if !ok {
+		return nil, errors.New("No protocols associated with that ID found")
+	}
+	return p.PartialBeacon(c, in)
 }
 
 // SearchProtocolConfig looks in the host folders for folders of running
