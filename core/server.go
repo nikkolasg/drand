@@ -4,16 +4,11 @@ import (
 	"path"
 	"sync"
 
+	"github.com/drand/drand/log"
 	"github.com/drand/drand/net"
 )
 
 type ID = string
-
-// V1ID is a generic ID that is inserted on incoming beacon related messages who
-// do NOT specify any ID. Indeed, v1 did not support multiple protocols so in
-// order to be backward compatible we are artificially injecting this ID on
-// incoming AND outgoing message.
-const V1ID = "v1backwardcompatible"
 
 type Server struct {
 	sync.RWMutex
@@ -97,11 +92,15 @@ func (c *Config) SearchProtocolConfig() []*ProtocolConfig {
 // information are contained to this protocol and isolated from others in a
 // different folder.
 type ProtocolConfig struct {
+	// The version of the protocol
 	Version Version
-	// the base folder where the protocol can write anything
+	// The base folder where the protocol can write anything
 	Folder string
-	// the client that allows this protocol to speak to other nodes
+	// The client that allows this protocol to speak to other nodes
 	Client net.ProtocolClient
+	// The logger to use for this protocol. The protocol is expected to
+	// customize the logger.
+	Log log.Logger
 }
 
 // DBFolder returns the folder which can be used by the database engine of the
