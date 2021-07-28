@@ -69,6 +69,8 @@ message PartialBeaconPacket {
     // partial signature - a threshold of them needs to be aggregated to produce
     // the final beacon at the given round.
     bytes partial_sig = 3;
+    // for which running protocol this partial beacon is for
+    bytes protocol_id = 4;
 }
 
 // DKGPacket is the packet that nodes send to others nodes as part of the
@@ -81,10 +83,12 @@ message DKGPacket{
 // chain
 message SyncRequest {
     uint64 from_round = 1;
+    bytes protocol_id = 2;
 }
 
 message BeaconPacket {
     bytes previous_sig = 1;
     uint64 round = 2;
     bytes signature = 3;
+    bytes protocol_id = 4;
 }

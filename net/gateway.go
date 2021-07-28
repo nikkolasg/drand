@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-
-	"github.com/drand/drand/protobuf/drand"
 )
 
 // PrivateGateway is the main interface to communicate to other drand nodes. It
@@ -38,13 +36,6 @@ type Listener interface {
 	Start()
 	Stop(ctx context.Context)
 	Addr() string
-}
-
-// Service holds all functionalities that a drand node should implement
-type Service interface {
-	drand.PublicServer
-	drand.ControlServer
-	drand.ProtocolServer
 }
 
 // NewGRPCPrivateGateway returns a grpc gateway listening on "listen" for the

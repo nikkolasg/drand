@@ -31,7 +31,7 @@ var errPreempted = errors.New("time out: pre-empted")
 // InitDKG take a InitDKGPacket, extracts the informations needed and wait for
 // the DKG protocol to finish. If the request specifies this node is a leader,
 // it starts the DKG protocol.
-func (d *Drand) InitDKG(c context.Context, in *drand.InitDKGPacket) (*drand.GroupPacket, error) {
+func (d *v1Protocol) InitDKG(c context.Context, in *drand.InitDKGPacket) (*drand.GroupPacket, error) {
 	isLeader := in.GetInfo().GetLeader()
 	d.state.Lock()
 	if d.dkgDone {
@@ -47,7 +47,7 @@ func (d *Drand) InitDKG(c context.Context, in *drand.InitDKGPacket) (*drand.Grou
 	d.log.Info("init_dkg", "begin", "time", d.opts.clock.Now().Unix(), "leader", true)
 
 	// setup the manager
-	newSetup := func(d *Drand) (*setupManager, error) {
+	newSetup := func(d *v1Protocol) (*setupManager, error) {
 		return newDKGSetup(d.log, d.opts.clock, d.priv.Public, in.GetBeaconPeriod(), in.GetCatchupPeriod(), in.GetInfo())
 	}
 
@@ -70,7 +70,7 @@ func (d *Drand) InitDKG(c context.Context, in *drand.InitDKGPacket) (*drand.Grou
 	return finalGroup.ToProto(), nil
 }
 
-func (d *Drand) leaderRunSetup(newSetup func(d *Drand) (*setupManager, error)) (group *key.Group, err error) {
+func (d *v1Protocol) leaderRunSetup(newSetup func(d *v1Protocol) (*setupManager, error)) (group *key.Group, err error) {
 	// setup the manager
 	d.state.Lock()
 	if d.manager != nil {
@@ -121,7 +121,7 @@ func (d *Drand) leaderRunSetup(newSetup func(d *Drand) (*setupManager, error)) (
 
 // runDKG setups the proper structures and protocol to run the DKG and waits
 // until it finishes. If leader is true, this node sends the first packet.
-func (d *Drand) runDKG(leader bool, group *key.Group, timeout uint32, randomness *drand.EntropyInfo) (*key.Group, error) {
+func (d *v1Protocol) runDKG(leader bool, group *key.Group, timeout uint32, randomness *drand.EntropyInfo) (*key.Group, error) {
 	reader, user := extractEntropy(randomness)
 	config := &dkg.Config{
 		Suite:          key.KeyGroup.(dkg.Suite),
@@ -184,7 +184,7 @@ func (d *Drand) runDKG(leader bool, group *key.Group, timeout uint32, randomness
 	return finalGroup, nil
 }
 
-func (d *Drand) cleanupDKG() {
+func (d *v1Protocol) cleanupDKG() {
 	if d.dkgInfo != nil {
 		d.dkgInfo.board.Stop()
 	}
@@ -194,7 +194,7 @@ func (d *Drand) cleanupDKG() {
 // runResharing setups all necessary structures to run the resharing protocol
 // and waits until it finishes (or timeouts). If leader is true, it sends the
 // first packet so other nodes will start as soon as they receive it.
-func (d *Drand) runResharing(leader bool, oldGroup, newGroup *key.Group, timeout uint32) (*key.Group, error) {
+func (d *v1Protocol) runResharing(leader bool, oldGroup, newGroup *key.Group, timeout uint32) (*key.Group, error) {
 	oldNode := oldGroup.Find(d.priv.Public)
 	oldPresent := oldNode != nil
 	if leader && !oldPresent {
@@ -289,7 +289,7 @@ func (d *Drand) runResharing(leader bool, oldGroup, newGroup *key.Group, timeout
 // This method sends the public key to the denoted leader address and then waits
 // to receive the group file. After receiving it, it starts the DKG process in
 // "waiting" mode, waiting for the leader to send the first packet.
-func (d *Drand) setupAutomaticDKG(_ context.Context, in *drand.InitDKGPacket) (*drand.GroupPacket, error) {
+func (d *v1Protocol) setupAutomaticDKG(_ context.Context, in *drand.InitDKGPacket) (*drand.GroupPacket, error) {
 	d.log.Info("init_dkg", "begin", "leader", false)
 	// determine the leader's address
 	laddr := in.GetInfo().GetLeaderAddress()
@@ -369,7 +369,7 @@ func (d *Drand) setupAutomaticDKG(_ context.Context, in *drand.InitDKGPacket) (*
 
 // similar to setupAutomaticDKG but with additional verification and information
 // w.r.t. to the previous group
-func (d *Drand) setupAutomaticResharing(_ context.Context, oldGroup *key.Group, in *drand.InitResharePacket) (*drand.GroupPacket, error) {
+func (d *v1Protocol) setupAutomaticResharing(_ context.Context, oldGroup *key.Group, in *drand.InitResharePacket) (*drand.GroupPacket, error) {
 	oldHash := oldGroup.Hash()
 	// determine the leader's address
 	laddr := in.GetInfo().GetLeaderAddress()
@@ -457,7 +457,7 @@ func (d *Drand) setupAutomaticResharing(_ context.Context, oldGroup *key.Group, 
 	return finalGroup.ToProto(), nil
 }
 
-func (d *Drand) validateGroupTransition(oldGroup, newGroup *key.Group) error {
+func (d *v1Protocol) validateGroupTransition(oldGroup, newGroup *key.Group) error {
 	if oldGroup.GenesisTime != newGroup.GenesisTime {
 		d.log.Error("setup_reshare", "invalid genesis time in received group")
 		return errors.New("control: old and new group have different genesis time")
@@ -480,7 +480,7 @@ func (d *Drand) validateGroupTransition(oldGroup, newGroup *key.Group) error {
 	return nil
 }
 
-func (d *Drand) extractGroup(old *drand.GroupInfo) (oldGroup *key.Group, err error) {
+func (d *v1Protocol) extractGroup(old *drand.GroupInfo) (oldGroup *key.Group, err error) {
 	d.state.Lock()
 	if oldGroup, err = extractGroup(old); err != nil {
 		// try to get the current group
@@ -498,7 +498,7 @@ func (d *Drand) extractGroup(old *drand.GroupInfo) (oldGroup *key.Group, err err
 
 // InitReshare receives information about the old and new group from which to
 // operate the resharing protocol.
-func (d *Drand) InitReshare(c context.Context, in *drand.InitResharePacket) (*drand.GroupPacket, error) {
+func (d *v1Protocol) InitReshare(c context.Context, in *drand.InitResharePacket) (*drand.GroupPacket, error) {
 	oldGroup, err := d.extractGroup(in.Old)
 	if err != nil {
 		return nil, err
@@ -511,7 +511,7 @@ func (d *Drand) InitReshare(c context.Context, in *drand.InitResharePacket) (*dr
 
 	d.log.Info("init_reshare", "begin", "leader", true, "time", d.opts.clock.Now())
 
-	newSetup := func(d *Drand) (*setupManager, error) {
+	newSetup := func(d *v1Protocol) (*setupManager, error) {
 		return newReshareSetup(d.log, d.opts.clock, d.priv.Public, oldGroup, in)
 	}
 
@@ -561,12 +561,12 @@ func (d *Drand) InitReshare(c context.Context, in *drand.InitResharePacket) (*dr
 
 // PingPong simply responds with an empty packet, proving that this drand node
 // is up and alive.
-func (d *Drand) PingPong(c context.Context, in *drand.Ping) (*drand.Pong, error) {
+func (d *v1Protocol) PingPong(c context.Context, in *drand.Ping) (*drand.Pong, error) {
 	return &drand.Pong{}, nil
 }
 
 // Share is a functionality of Control Service defined in protobuf/control that requests the private share of the drand node running locally
-func (d *Drand) Share(ctx context.Context, in *drand.ShareRequest) (*drand.ShareResponse, error) {
+func (d *v1Protocol) Share(ctx context.Context, in *drand.ShareRequest) (*drand.ShareResponse, error) {
 	share, err := d.store.LoadShare()
 	if err != nil {
 		return nil, err
@@ -581,7 +581,7 @@ func (d *Drand) Share(ctx context.Context, in *drand.ShareRequest) (*drand.Share
 
 // PublicKey is a functionality of Control Service defined in protobuf/control
 // that requests the long term public key of the drand node running locally
-func (d *Drand) PublicKey(ctx context.Context, in *drand.PublicKeyRequest) (*drand.PublicKeyResponse, error) {
+func (d *v1Protocol) PublicKey(ctx context.Context, in *drand.PublicKeyRequest) (*drand.PublicKeyResponse, error) {
 	d.state.Lock()
 	defer d.state.Unlock()
 	keyPair, err := d.store.LoadKeyPair()
@@ -597,7 +597,7 @@ func (d *Drand) PublicKey(ctx context.Context, in *drand.PublicKeyRequest) (*dra
 
 // PrivateKey is a functionality of Control Service defined in protobuf/control
 // that requests the long term private key of the drand node running locally
-func (d *Drand) PrivateKey(ctx context.Context, in *drand.PrivateKeyRequest) (*drand.PrivateKeyResponse, error) {
+func (d *v1Protocol) PrivateKey(ctx context.Context, in *drand.PrivateKeyRequest) (*drand.PrivateKeyResponse, error) {
 	d.state.Lock()
 	defer d.state.Unlock()
 	keyPair, err := d.store.LoadKeyPair()
@@ -612,7 +612,7 @@ func (d *Drand) PrivateKey(ctx context.Context, in *drand.PrivateKeyRequest) (*d
 }
 
 // GroupFile replies with the distributed key in the response
-func (d *Drand) GroupFile(ctx context.Context, in *drand.GroupRequest) (*drand.GroupPacket, error) {
+func (d *v1Protocol) GroupFile(ctx context.Context, in *drand.GroupRequest) (*drand.GroupPacket, error) {
 	d.state.Lock()
 	defer d.state.Unlock()
 	if d.group == nil {
@@ -623,7 +623,7 @@ func (d *Drand) GroupFile(ctx context.Context, in *drand.GroupRequest) (*drand.G
 }
 
 // Shutdown stops the node
-func (d *Drand) Shutdown(ctx context.Context, in *drand.ShutdownRequest) (*drand.ShutdownResponse, error) {
+func (d *v1Protocol) Shutdown(ctx context.Context, in *drand.ShutdownRequest) (*drand.ShutdownResponse, error) {
 	d.Stop(ctx)
 	return nil, nil
 }
@@ -654,7 +654,7 @@ func extractEntropy(i *drand.EntropyInfo) (io.Reader, bool) {
 	return r, user
 }
 
-func (d *Drand) getPhaser(timeout uint32) *dkg.TimePhaser {
+func (d *v1Protocol) getPhaser(timeout uint32) *dkg.TimePhaser {
 	tDuration := time.Duration(timeout) * time.Second
 	if timeout == 0 {
 		tDuration = DefaultDKGTimeout
@@ -692,7 +692,7 @@ type pushResult struct {
 }
 
 // pushDKGInfoPacket sets a specific DKG info packet to spcified nodes, and returns a stream of responses.
-func (d *Drand) pushDKGInfoPacket(ctx context.Context, nodes []*key.Node, packet *drand.DKGInfoPacket) chan pushResult {
+func (d *v1Protocol) pushDKGInfoPacket(ctx context.Context, nodes []*key.Node, packet *drand.DKGInfoPacket) chan pushResult {
 	results := make(chan pushResult, len(nodes))
 
 	for _, node := range nodes {
@@ -710,7 +710,7 @@ func (d *Drand) pushDKGInfoPacket(ctx context.Context, nodes []*key.Node, packet
 
 // pushDKGInfo sends the information to run the DKG to all specified nodes. The
 // call is blocking until all nodes have replied or after one minute timeouts.
-func (d *Drand) pushDKGInfo(outgoing, incoming []*key.Node, previousThreshold int, group *key.Group, secret []byte, timeout uint32) error {
+func (d *v1Protocol) pushDKGInfo(outgoing, incoming []*key.Node, previousThreshold int, group *key.Group, secret []byte, timeout uint32) error {
 	// sign the group to prove you are the leader
 	signature, err := key.DKGAuthScheme.Sign(d.priv.Key, group.Hash())
 	if err != nil {
@@ -781,7 +781,7 @@ func getNonce(g *key.Group) []byte {
 }
 
 // StartFollowChain syncs up with a chain from other nodes
-func (d *Drand) StartFollowChain(req *drand.StartFollowRequest, stream drand.Control_StartFollowChainServer) error {
+func (d *v1Protocol) StartFollowChain(req *drand.StartFollowRequest, stream drand.Control_StartFollowChainServer) error {
 	// TODO replace via a more independent chain manager that manages the
 	// transition from following -> participating
 	d.state.Lock()
@@ -912,7 +912,7 @@ func sendProgressCallback(
 }
 
 // BackupDatabase triggers a backup of the primary database.
-func (d *Drand) BackupDatabase(ctx context.Context, req *drand.BackupDBRequest) (*drand.BackupDBResponse, error) {
+func (d *v1Protocol) BackupDatabase(ctx context.Context, req *drand.BackupDBRequest) (*drand.BackupDBResponse, error) {
 	d.state.Lock()
 	if d.beacon == nil {
 		d.state.Unlock()

@@ -267,3 +267,45 @@ func WithVersion(version string) ConfigOption {
 		d.version = version
 	}
 }
+
+// SearchProtocolConfig looks in the host folders for folders of running
+// protocols and return them if it finds any. These returned config are needed
+// to instantiate and run the different protocols this server manages.
+// The way folders are organized is by group hash:
+// baseFolder/<group_hash>/{VERSION,...}
+// The protocol can write anything inside his folder but it is required to write
+// a VERSION fifacturesle containing the version string of the protocol (required to
+// load the protocol)..
+// Note that for the v1 protocol, since it did not use this configuration, this
+// function looks for
+// 		baseFolder/{db/,groups/,key/}
+// If it finds those folders, it instantiates the protocol using those, and
+// under the V1ID so it is backward compatible..
+func (c *Config) SearchProtocolConfig() []*ProtocolConfig {
+	// TODO
+	return nil
+}
+
+// ProtocolConfig is the configuration used by one instance of a protocol - its
+// information are contained to this protocol and isolated from others in a
+// different folder.
+type ProtocolConfig struct {
+	// The version of the protocol
+	Version Version
+	// The base folder where the protocol can write anything
+	Folder string
+	// The client that allows this protocol to speak to other nodes
+	Client net.ProtocolClient
+	// The logger to use for this protocol. The protocol is expected to
+	// customize the logger.
+	Log log.Logger
+	// The clock to use - useful for tests where we want to "control " time to
+	// have precise expectation of the behavior.
+	clock clock.Clock
+}
+
+// DBFolder returns the folder which can be used by the database engine of the
+// protocol
+func (p *ProtocolConfig) DBFolder() string {
+	return path.Join(p.Folder, DefaultDBFolder)
+}
