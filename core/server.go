@@ -1,27 +1,32 @@
-package drand
+package core
 
 import (
 	"context"
 	"errors"
-	"path"
+	"fmt"
 	"sync"
 
-	"github.com/drand/drand/log"
+	"github.com/drand/drand/http"
 	"github.com/drand/drand/net"
 	"github.com/drand/drand/protobuf/drand"
 )
 
+// ID is ID of a running protocol - an unique identifier for each running
+// protocol. Currently it is the group hash of the genesis group.
 type ID = string
 
 type Server struct {
 	sync.RWMutex
-	// list of active protocols
+	// list of active protocols mapped by their IDs. Each protocol has its own
+	// folder.
 	protocols map[ID]Protocol
 	// explicit inclusion of the V1 ID to know how to fill the id on incoming
 	// messages. We make the assumption that there is only one V1 protocol
 	// running.
 	v1ID ID
 	// running setup protocol. It is nil when there is no setup in progress.
+	// Note this is NOT for a resharing phase, where the protocol is already
+	// running (regardless if it is for a new node or node).
 	setup Protocol
 	// all the network componenents. The server maintains them all and dispatch
 	// the requests to the requested protocol.
@@ -36,16 +41,55 @@ type Server struct {
 var _ net.Service = (*Server)(nil)
 
 func NewServer(c *Config) Server {
+	server := new(Server)
 	// instantiate the network components
-	return &Server{}
+	if !c.insecure && (c.certPath == "" || c.keyPath == "") {
+		return nil, errors.New("config: need to set WithInsecure if no certificate and private key path given")
+	}
+	// Set the private API address to the command-line flag, if given.
+	// Otherwise, set it to the address associated with stored private key.
+	privAddr := c.PrivateListenAddress(c.priv.Public.Address())
+	pubAddr := c.PublicListenAddress("")
+	// ctx is used to create the gateway below.  Gateway constructors
+	// (specifically, the generated gateway stubs that require it) do not
+	// actually use it, so we are passing a background context to be safe.
+	ctx := context.Background()
+	var err error
+	c.log.Info("network", "init", "insecure", c.insecure)
+	if pubAddr != "" {
+		handler, err := http.New(ctx, &drandProxy{server}, c.Version(), c.log.With("server", "http"))
+		if err != nil {
+			return err
+		}
+		if server.pubGateway, err = net.NewRESTPublicGateway(ctx, pubAddr, c.certPath, c.keyPath, c.certmanager, handler, c.insecure); err != nil {
+			return err
+		}
+	}
+	server.privGateway, err = net.NewGRPCPrivateGateway(ctx, privAddr, c.certPath, c.keyPath, c.certmanager, server, c.insecure, d.opts.grpcOpts...)
+	if err != nil {
+		return err
+	}
+	p := c.ControlPort()
+	server.control = net.NewTCPGrpcControlListener(server, p)
+	go control.Start()
+	c.log.Info("private_listen", privAddr, "control_port", c.ControlPort(), "public_listen", pubAddr, "folder", d.opts.ConfigFolder())
+	privGateway.StartAll()
+	if pubGateway != nil {
+		pubGateway.StartAll()
+	}
+	server.protocols = make(map[ID]Protocol)
+	return server, nil
 }
 
 // LoadProtocols looks for already running protocols and run those if present
 // It tries to run all protocols and return a combined error for each protocol
 // that failed to run properly.
+// NOTE For v1, it only loads the first one it finds and returns errors for the
+// other.
 func (s *Server) LoadProtocols() error {
 	protoConfigs = s.c.SearchprotocolConfig()
 	var errs []string
+	var v1Found bool
 	for _, c := range protoConfigs {
 		factory := getProtocolFactory(c.Version)
 		protocol, err := factory.Load(c)
@@ -55,8 +99,13 @@ func (s *Server) LoadProtocols() error {
 		}
 		s.protocols[protocol.Key()] = protocol
 		if c.Version == VERSION_1 {
+			if v1Found {
+				errrs = append(errs, fmt.Errorf("V1 duplicate protocol found"))
+				continue
+			}
 			// explicit saving of the v1 ID
 			s.v1ID = protocol.Key()
+			v1Found = true
 		}
 	}
 	// XXX Later we could also save some information for a protocol that was in
@@ -100,43 +149,4 @@ func (s *Server) PartialBeacon(c context.Context, in *drand.PartialBeaconPacket)
 		return nil, errors.New("No protocols associated with that ID found")
 	}
 	return p.PartialBeacon(c, in)
-}
-
-// SearchProtocolConfig looks in the host folders for folders of running
-// protocols and return them if it finds any. These returned config are needed
-// to instantiate and run the different protocols this server manages.
-// The way folders are organized is by group hash:
-// baseFolder/<group_hash>/{VERSION,...}
-// The protocol can write anything inside his folder but it is required to write
-// a VERSION file containing the version string of the protocol (required to
-// load the protocol)..
-// Note that for the v1 protocol, since it did not use this configuration, this
-// function looks for
-// 		baseFolder/{db/,groups/,key/}
-// If it finds those folders, it instantiates the protocol using those, and
-// under the V1ID so it is backward compatible..
-func (c *Config) SearchProtocolConfig() []*ProtocolConfig {
-	// TODO
-	return nil
-}
-
-// ProtocolConfig is the configuration used by one instance of a protocol - its
-// information are contained to this protocol and isolated from others in a
-// different folder.
-type ProtocolConfig struct {
-	// The version of the protocol
-	Version Version
-	// The base folder where the protocol can write anything
-	Folder string
-	// The client that allows this protocol to speak to other nodes
-	Client net.ProtocolClient
-	// The logger to use for this protocol. The protocol is expected to
-	// customize the logger.
-	Log log.Logger
-}
-
-// DBFolder returns the folder which can be used by the database engine of the
-// protocol
-func (p *ProtocolConfig) DBFolder() string {
-	return path.Join(p.Folder, DefaultDBFolder)
 }

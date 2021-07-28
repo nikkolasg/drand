@@ -9,7 +9,7 @@ import (
 )
 
 // PeerMetrics exports a handler for retreiving metric information from group peers
-func (d *Drand) PeerMetrics(c context.Context) (map[string]http.Handler, error) {
+func (d *v1Protocol) PeerMetrics(c context.Context) (map[string]http.Handler, error) {
 	if d.group == nil {
 		return nil, errors.New("no group yet")
 	}

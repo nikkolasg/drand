@@ -8,15 +8,12 @@ import (
 
 	"github.com/drand/drand/chain"
 	"github.com/drand/drand/chain/beacon"
-	"github.com/drand/drand/entropy"
-	"github.com/drand/drand/key"
 	"github.com/drand/drand/net"
 	"github.com/drand/drand/protobuf/drand"
-	"github.com/drand/kyber/encrypt/ecies"
 )
 
 // BroadcastDKG is the public method to call during a DKG protocol.
-func (d *Drand) BroadcastDKG(c context.Context, in *drand.DKGPacket) (*drand.Empty, error) {
+func (d *v1Protocol) BroadcastDKG(c context.Context, in *drand.DKGPacket) (*drand.Empty, error) {
 	d.state.Lock()
 	defer d.state.Unlock()
 	if d.dkgInfo == nil {
@@ -36,7 +33,7 @@ func (d *Drand) BroadcastDKG(c context.Context, in *drand.DKGPacket) (*drand.Emp
 
 // PartialBeacon receives a beacon generation request and answers
 // with the partial signature from this drand node.
-func (d *Drand) PartialBeacon(c context.Context, in *drand.PartialBeaconPacket) (*drand.Empty, error) {
+func (d *v1Protocol) PartialBeacon(c context.Context, in *drand.PartialBeaconPacket) (*drand.Empty, error) {
 	d.state.Lock()
 	if d.beacon == nil {
 		d.state.Unlock()
@@ -49,7 +46,7 @@ func (d *Drand) PartialBeacon(c context.Context, in *drand.PartialBeaconPacket) 
 
 // PublicRand returns a public random beacon according to the request. If the Round
 // field is 0, then it returns the last one generated.
-func (d *Drand) PublicRand(c context.Context, in *drand.PublicRandRequest) (*drand.PublicRandResponse, error) {
+func (d *v1Protocol) PublicRand(c context.Context, in *drand.PublicRandRequest) (*drand.PublicRandResponse, error) {
 	var addr = net.RemoteAddress(c)
 	d.state.Lock()
 	defer d.state.Unlock()
@@ -73,7 +70,7 @@ func (d *Drand) PublicRand(c context.Context, in *drand.PublicRandRequest) (*dra
 }
 
 // PublicRandStream exports a stream of new beacons as they are generated over gRPC
-func (d *Drand) PublicRandStream(req *drand.PublicRandRequest, stream drand.Public_PublicRandStreamServer) error {
+func (d *v1Protocol) PublicRandStream(req *drand.PublicRandRequest, stream drand.Public_PublicRandStreamServer) error {
 	var b *beacon.Handler
 	d.state.Lock()
 	if d.beacon == nil {
@@ -122,34 +119,8 @@ func (d *Drand) PublicRandStream(req *drand.PublicRandRequest, stream drand.Publ
 	return <-done
 }
 
-// PrivateRand returns an ECIES encrypted random blob of 32 bytes from /dev/urandom
-func (d *Drand) PrivateRand(c context.Context, priv *drand.PrivateRandRequest) (*drand.PrivateRandResponse, error) {
-	if !d.opts.enablePrivate {
-		return nil, errors.New("private randomness is disabled")
-	}
-	msg, err := ecies.Decrypt(key.KeyGroup, d.priv.Key, priv.GetRequest(), EciesHash)
-	if err != nil {
-		d.log.With("module", "public").Error("private", "invalid ECIES", "err", err.Error())
-		return nil, errors.New("invalid ECIES request")
-	}
-
-	clientKey := key.KeyGroup.Point()
-	if err := clientKey.UnmarshalBinary(msg); err != nil {
-		return nil, errors.New("invalid client key")
-	}
-	randomness, err := entropy.GetRandom(nil, PrivateRandLength)
-	if err != nil {
-		return nil, fmt.Errorf("error gathering randomness: %s", err)
-	} else if len(randomness) != PrivateRandLength {
-		return nil, fmt.Errorf("error gathering randomness: expected 32 bytes, got %d", len(randomness))
-	}
-
-	obj, err := ecies.Encrypt(key.KeyGroup, clientKey, randomness, EciesHash)
-	return &drand.PrivateRandResponse{Response: obj}, err
-}
-
 // Home provides the address the local node is listening
-func (d *Drand) Home(c context.Context, in *drand.HomeRequest) (*drand.HomeResponse, error) {
+func (d *v1Protocol) Home(c context.Context, in *drand.HomeRequest) (*drand.HomeResponse, error) {
 	d.log.With("module", "public").Info("home", net.RemoteAddress(c))
 	return &drand.HomeResponse{
 		Status: fmt.Sprintf("drand up and running on %s",
@@ -158,7 +129,7 @@ func (d *Drand) Home(c context.Context, in *drand.HomeRequest) (*drand.HomeRespo
 }
 
 // ChainInfo replies with the chain information this node participates to
-func (d *Drand) ChainInfo(ctx context.Context, in *drand.ChainInfoRequest) (*drand.ChainInfoPacket, error) {
+func (d *v1Protocol) ChainInfo(ctx context.Context, in *drand.ChainInfoRequest) (*drand.ChainInfoPacket, error) {
 	d.state.Lock()
 	defer d.state.Unlock()
 	if d.group == nil {
@@ -168,7 +139,7 @@ func (d *Drand) ChainInfo(ctx context.Context, in *drand.ChainInfoRequest) (*dra
 }
 
 // SignalDKGParticipant receives a dkg signal packet from another member
-func (d *Drand) SignalDKGParticipant(ctx context.Context, p *drand.SignalDKGPacket) (*drand.Empty, error) {
+func (d *v1Protocol) SignalDKGParticipant(ctx context.Context, p *drand.SignalDKGPacket) (*drand.Empty, error) {
 	d.state.Lock()
 	defer d.state.Unlock()
 	if d.manager == nil {
@@ -184,7 +155,7 @@ func (d *Drand) SignalDKGParticipant(ctx context.Context, p *drand.SignalDKGPack
 }
 
 // PushDKGInfo triggers sending DKG info to other members
-func (d *Drand) PushDKGInfo(ctx context.Context, in *drand.DKGInfoPacket) (*drand.Empty, error) {
+func (d *v1Protocol) PushDKGInfo(ctx context.Context, in *drand.DKGInfoPacket) (*drand.Empty, error) {
 	d.state.Lock()
 	defer d.state.Unlock()
 	if d.receiver == nil {
@@ -198,7 +169,7 @@ func (d *Drand) PushDKGInfo(ctx context.Context, in *drand.DKGInfoPacket) (*dran
 
 // SyncChain is a inter-node protocol that replies to a syncing request from a
 // given round
-func (d *Drand) SyncChain(req *drand.SyncRequest, stream drand.Protocol_SyncChainServer) error {
+func (d *v1Protocol) SyncChain(req *drand.SyncRequest, stream drand.Protocol_SyncChainServer) error {
 	d.state.Lock()
 	b := d.beacon
 	d.state.Unlock()
@@ -209,6 +180,6 @@ func (d *Drand) SyncChain(req *drand.SyncRequest, stream drand.Protocol_SyncChai
 }
 
 // GetIdentity returns the identity of this drand node
-func (d *Drand) GetIdentity(ctx context.Context, req *drand.IdentityRequest) (*drand.Identity, error) {
+func (d *v1Protocol) GetIdentity(ctx context.Context, req *drand.IdentityRequest) (*drand.Identity, error) {
 	return d.priv.Public.ToProto(), nil
 }

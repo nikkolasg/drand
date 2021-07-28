@@ -1,4 +1,4 @@
-package drand
+package core
 
 // BLS12381 - SHA256(r)
 const VERSION_2 = "V2"

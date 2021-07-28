@@ -60,6 +60,7 @@ message ChainInfoPacket {
     // compute its hash
     bytes hash = 4;
     // hash of the genesis group
+    // TODO: rename protocol_id when feasible ?
     bytes groupHash = 5;
     uint32 version = 6;
 }

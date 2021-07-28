@@ -1,4 +1,4 @@
-package drand
+package core
 
 import (
 	"fmt"

@@ -39,8 +39,8 @@ message PublicRandRequest {
     // round uniquely identifies a beacon. If round == 0 (or unspecified), then
     // the response will contain the last.
     uint64 round = 1;
-    // for which group do you ask randomness for
-    bytes group_hash = 2;
+    // for which protocol id do you ask he randomness from
+    bytes protocol_id = 2;
 }
 
 // PublicRandResponse holds a signature which is the random value. It can be
