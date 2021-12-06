@@ -20,3 +20,5 @@ const MaxCatchupBuffer = 1000
 // CallbackWorkerQueue is the length of the channel that the callback worker
 // uses to dispatch beacons to its workers.
 const CallbackWorkerQueue = 100
+
+const GossipNeighbors = 12
