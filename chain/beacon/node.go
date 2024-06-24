@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"fmt"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/drand/drand/chain"
+	"github.com/drand/drand/chain/gossip"
 	commonutils "github.com/drand/drand/common"
 	"github.com/drand/drand/log"
 	"github.com/drand/drand/protobuf/common"
@@ -47,15 +46,15 @@ type Handler struct {
 	chain    *chainStore
 	ticker   *ticker
 	verifier *chain.Verifier
-
-	close   chan bool
-	addr    string
-	started bool
-	running bool
-	serving bool
-	stopped bool
-	l       log.Logger
-	version commonutils.Version
+	gossiper gossip.Gossiper
+	close    chan bool
+	addr     string
+	started  bool
+	running  bool
+	serving  bool
+	stopped  bool
+	l        log.Logger
+	version  commonutils.Version
 }
 
 // NewHandler returns a fresh handler ready to serve and create randomness
@@ -81,9 +80,21 @@ func NewHandler(c net.ProtocolClient, s chain.Store, conf *Config, l log.Logger,
 	store := newChainStore(logger, conf, c, crypto, s, ticker)
 	verifier := chain.NewVerifier(conf.Group.Scheme)
 
+	peers := createPeerList(conf.Group, conf.Public)
+	gossiper := gossip.NewGossiper(&gossip.Config{
+		Log:    logger,
+		List:   peers,
+		Send:   getGossipSend(c),
+		Factor: GossipNeighbors,
+		// each member gossip a different partial sig
+		// *2 because may be 2 rounds at same time?
+		BufferSize: conf.Group.Len() * 2,
+	})
+
 	handler := &Handler{
 		conf:     conf,
 		client:   c,
+		gossiper: gossiper,
 		crypto:   crypto,
 		chain:    store,
 		verifier: verifier,
@@ -93,6 +104,7 @@ func NewHandler(c net.ProtocolClient, s chain.Store, conf *Config, l log.Logger,
 		l:        logger,
 		version:  version,
 	}
+	go handler.ProcessDeliveredBeacons()
 	return handler, nil
 }
 
@@ -101,55 +113,68 @@ var errOutOfRound = "out-of-round beacon request"
 // ProcessPartialBeacon receives a request for a beacon partial signature. It
 // forwards it to the round manager if it is a valid beacon.
 func (h *Handler) ProcessPartialBeacon(c context.Context, p *proto.PartialBeaconPacket) (*proto.Empty, error) {
-	beaconID := h.conf.Group.ID
 	addr := net.RemoteAddress(c)
-	h.l.Debugw("", "beacon_id", beaconID, "received", "request", "from", addr, "round", p.GetRound())
-
-	nextRound, _ := chain.NextRound(h.conf.Clock.Now().Unix(), h.conf.Group.Period, h.conf.Group.GenesisTime)
-	currentRound := nextRound - 1
-
-	// we allow one round off in the future because of small clock drifts
-	// possible, if a node receives a packet very fast just before his local
-	// clock passed to the next round
-	if p.GetRound() > nextRound {
-		h.l.Errorw("", "beacon_id", beaconID, "process_partial", addr, "invalid_future_round", p.GetRound(), "current_round", currentRound)
-		return nil, fmt.Errorf("invalid round: %d instead of %d", p.GetRound(), currentRound)
-	}
-
-	msg := h.verifier.DigestMessage(p.GetRound(), p.GetPreviousSig())
-
-	// XXX Remove that evaluation - find another way to show the current dist.
-	// key being used
-	shortPub := h.crypto.GetPub().Eval(1).V.String()[14:19]
-	// verify if request is valid
-	if err := key.Scheme.VerifyPartial(h.crypto.GetPub(), msg, p.GetPartialSig()); err != nil {
-		h.l.Errorw("", "beacon_id", beaconID,
-			"process_partial", addr, "err", err,
-			"prev_sig", shortSigStr(p.GetPreviousSig()),
-			"curr_round", currentRound,
-			"msg_sign", shortSigStr(msg),
-			"short_pub", shortPub)
-		return nil, err
-	}
-	h.l.Debugw("", "beacon_id", beaconID,
-		"process_partial", addr,
-		"prev_sig", shortSigStr(p.GetPreviousSig()),
-		"curr_round", currentRound, "msg_sign",
-		shortSigStr(msg), "short_pub", shortPub,
-		"status", "OK")
-	idx, _ := key.Scheme.IndexOf(p.GetPartialSig())
-	if idx == h.crypto.Index() {
-		h.l.Errorw("", "beacon_id", beaconID,
-			"process_partial", addr,
-			"index_got", idx,
-			"index_our", h.crypto.Index(),
-			"advance_packet", p.GetRound(),
-			"pub", shortPub)
-		// XXX error or not ?
-		return new(proto.Empty), nil
-	}
-	h.chain.NewValidPartial(addr, p)
+	beaconID := h.conf.Group.ID
+	h.l.Debugw("", "beacon_id", beaconID, "received_partial", addr, "round", p.GetRound())
+	h.gossiper.NewIncoming(gossip.Packet{
+		Peer: net.CreatePeer(addr, true), // doesn't matter tls or not
+		Msg:  p,
+	})
 	return new(proto.Empty), nil
+}
+
+func (h *Handler) ProcessDeliveredBeacons() {
+	for packet := range h.gossiper.Delivery() {
+		// guaranteed to work since we only put partials in the gossip
+		p := packet.Msg.(*proto.PartialBeaconPacket)
+		addr := packet.Peer.Address()
+		beaconID := h.conf.Group.ID
+		h.l.Debugw("", "beacon_id", beaconID, "delivered_partial", addr, "round", p.GetRound())
+		nextRound, _ := chain.NextRound(h.conf.Clock.Now().Unix(), h.conf.Group.Period, h.conf.Group.GenesisTime)
+		currentRound := nextRound - 1
+
+		// we allow one round off in the future because of small clock drifts
+		// possible, if a node receives a packet very fast just before his local
+		// clock passed to the next round
+		if p.GetRound() > nextRound {
+			h.l.Errorw("", "beacon_id", beaconID, "process_partial", addr, "invalid_future_round", p.GetRound(), "current_round", currentRound)
+			continue
+		}
+
+		msg := h.verifier.DigestMessage(p.GetRound(), p.GetPreviousSig())
+
+		// XXX Remove that evaluation - find another way to show the current dist.
+		// key being used
+		shortPub := h.crypto.GetPub().Eval(1).V.String()[14:19]
+		// verify if request is valid
+		if err := key.Scheme.VerifyPartial(h.crypto.GetPub(), msg, p.GetPartialSig()); err != nil {
+			h.l.Errorw("", "beacon_id", beaconID,
+				"process_partial", addr, "err", err,
+				"prev_sig", shortSigStr(p.GetPreviousSig()),
+				"curr_round", currentRound,
+				"msg_sign", shortSigStr(msg),
+				"short_pub", shortPub)
+			continue
+		}
+		h.l.Debugw("", "beacon_id", beaconID,
+			"process_partial", addr,
+			"prev_sig", shortSigStr(p.GetPreviousSig()),
+			"curr_round", currentRound, "msg_sign",
+			shortSigStr(msg), "short_pub", shortPub,
+			"status", "OK")
+		idx, _ := key.Scheme.IndexOf(p.GetPartialSig())
+		if idx == h.crypto.Index() {
+			h.l.Errorw("", "beacon_id", beaconID,
+				"process_partial", addr,
+				"index_got", idx,
+				"index_our", h.crypto.Index(),
+				"advance_packet", p.GetRound(),
+				"pub", shortPub)
+			// XXX error or not ?
+			continue
+		}
+		h.chain.NewValidPartial(addr, p)
+	}
 }
 
 // Store returns the store associated with this beacon handler
@@ -243,6 +268,8 @@ func (h *Handler) TransitionNewGroup(newShare *key.Share, newGroup *key.Group) {
 			return
 		}
 		h.crypto.SetInfo(newGroup, newShare)
+		// tell the gossiper to use the new list of peers now
+		h.gossiper.NewPeers(createPeerList(newGroup, h.conf.Public))
 		h.chain.RemoveCallback("transition")
 	})
 }
@@ -353,7 +380,6 @@ func (h *Handler) run(startTime int64) {
 }
 
 func (h *Handler) broadcastNextPartial(current roundInfo, upon *chain.Beacon) {
-	ctx := context.Background()
 	previousSig := upon.Signature
 	round := upon.Round + 1
 	beaconID := h.conf.Group.ID
@@ -386,22 +412,7 @@ func (h *Handler) broadcastNextPartial(current roundInfo, upon *chain.Beacon) {
 	}
 
 	h.chain.NewValidPartial(h.addr, packet)
-	for _, id := range h.crypto.GetGroup().Nodes {
-		if h.addr == id.Address() {
-			continue
-		}
-		go func(i *key.Identity) {
-			h.l.Debugw("", "beacon_id", beaconID, "beacon_round", round, "send_to", i.Address())
-			err := h.client.PartialBeacon(ctx, i, packet)
-			if err != nil {
-				h.l.Errorw("", "beacon_id", beaconID, "beacon_round", round, "err_request", err, "from", i.Address())
-				if strings.Contains(err.Error(), errOutOfRound) {
-					h.l.Errorw("", "beacon_id", beaconID, "beacon_round", round, "node", i.Addr, "reply", "out-of-round")
-				}
-				return
-			}
-		}(id.Identity)
-	}
+	h.gossiper.Gossip(packet)
 }
 
 // Stop the beacon loop from aggregating  further randomness, but it
@@ -467,4 +478,26 @@ func shortSigStr(sig []byte) string {
 		max = len(sig)
 	}
 	return hex.EncodeToString(sig[0:max])
+}
+
+func getGossipSend(cl net.ProtocolClient) func(p gossip.Packet) error {
+	return func(p gossip.Packet) error {
+		to := p.Peer
+		// guaranteed to not panic because we only pass these messages to gossiper
+		msg := p.Msg.(*proto.PartialBeaconPacket)
+		ctx, cancel := context.WithTimeout(context.Background(), MaxSyncWaitTime)
+		defer cancel()
+		return cl.PartialBeacon(ctx, to, msg)
+	}
+}
+
+func createPeerList(g *key.Group, us net.Peer) []net.Peer {
+	peers := make([]net.Peer, 0, g.Len())
+	for _, n := range g.Nodes {
+		if n.Address() == us.Address() {
+			continue
+		}
+		peers = append(peers, n)
+	}
+	return peers
 }
